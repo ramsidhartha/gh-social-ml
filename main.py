@@ -7,14 +7,15 @@ Stage 1 of the full architecture:
       ↓
   Enrichment  (metadata, languages, topics, README, star deltas)
       ↓
+  Quality Filter  (drop no-README shells, content-free repos)
+      ↓
   EnrichmentResult list  (ready for Stage 2 — Feature Extraction)
 
 Usage:
-    python3 main.py [--limit N] [--batch-size N] [--log-level LEVEL]
+    python3 main.py [--limit N] [--batch-size N] [--min-readme-chars N] [--log-level LEVEL]
 
 Environment:
-    GITHUB_TOKEN  — required, set in .env
-"""
+    GITHUB_TOKEN  — required, set in .env"""
 
 from __future__ import annotations
 
@@ -106,32 +107,103 @@ def run_acquisition(
     return enriched
 
 
+# ══════════════════════════════════════════════════════════════════════════════
+#  QUALITY FILTER
+# ══════════════════════════════════════════════════════════════════════════════
+
+# Signals used to classify a repo as a content-free shell:
+#   • readme_length < min_readme_chars  → no README or too thin to embed
+#   • no description AND no languages AND no topics
+#     → the repo has nothing meaningful (bookmark list, config dump, etc.)
+
+def filter_enriched(
+    enriched: list,
+    *,
+    min_readme_chars: int = 200,
+) -> tuple[list, list]:
+    """
+    Split enriched repos into (kept, dropped).
+
+    dropped is a list of (EnrichmentResult, list[str]) tuples where the
+    second element is the list of reasons the repo was dropped.
+
+    Args:
+        enriched:         Raw output of run_acquisition().
+        min_readme_chars: Repos whose README is shorter than this are dropped.
+                          Default 200 — enough for a meaningful description but
+                          short enough not to penalise compact technical READMEs.
+
+    Returns:
+        kept    — clean list ready for Stage 2 (Feature Extraction)
+        dropped — audit list so the team can inspect what was filtered
+    """
+    kept:    list = []
+    dropped: list = []   # list of (EnrichmentResult, reasons: list[str])
+
+    for r in enriched:
+        p       = r.payload
+        reasons = []
+
+        # ── Check 1: README quality ───────────────────────────────────────────
+        readme_len = p.get("readme_length", 0)
+        if readme_len == 0:
+            reasons.append("no README")
+        elif readme_len < min_readme_chars:
+            reasons.append(f"README too thin ({readme_len} chars < {min_readme_chars})")
+
+        # ── Check 2: Content-free shell ───────────────────────────────────────
+        has_description = bool((p.get("description") or "").strip())
+        has_languages   = bool(p.get("languages"))
+        has_topics      = bool(p.get("topics"))
+
+        if not has_description and not has_languages and not has_topics:
+            reasons.append("shell repo: no description, languages, or topics")
+
+        if reasons:
+            dropped.append((r, reasons))
+        else:
+            kept.append(r)
+
+    return kept, dropped
+
+
 # ── Summary printer ───────────────────────────────────────────────────────────
 
-def _print_summary(enriched: list) -> None:
-    if not enriched:
-        logger.warning("No repos to display.")
-        return
-
-    sorted_repos = sorted(enriched, key=lambda r: r.payload.get("star_count", 0), reverse=True)
-
+def _print_summary(kept: list, dropped: list) -> None:
     width = 95
-    print(f"\n{'═' * width}")
-    print(f"  Acquisition complete — {len(enriched)} repos enriched")
-    print(f"{'═' * width}")
-    print(f"{'#':<4} {'Repository':<42} {'⭐ Stars':>8} {'Language':<14} {'README':>8}  Topics")
-    print("─" * width)
 
-    for i, r in enumerate(sorted_repos, 1):
-        p = r.payload
-        topics_str = ", ".join(p.get("topics", [])[:3]) or "—"
-        print(
-            f"{i:<4} {p['id']:<42} {p.get('star_count', 0):>8,}  "
-            f"{p.get('primary_language', 'Unknown'):<14} "
-            f"{p.get('readme_length', 0):>7,}c  {topics_str}"
-        )
+    # ── Kept repos ────────────────────────────────────────────────────────────
+    if not kept:
+        logger.warning("No repos passed the quality filter.")
+    else:
+        sorted_repos = sorted(kept, key=lambda r: r.payload.get("star_count", 0), reverse=True)
+        print(f"\n{'═' * width}")
+        print(f"  ✅  {len(kept)} repos passed quality filter")
+        print(f"{'═' * width}")
+        print(f"{'#':<4} {'Repository':<42} {'⭐ Stars':>8} {'Language':<14} {'README':>8}  Topics")
+        print("─" * width)
+        for i, r in enumerate(sorted_repos, 1):
+            p = r.payload
+            topics_str = ", ".join(p.get("topics", [])[:3]) or "—"
+            print(
+                f"{i:<4} {p['id']:<42} {p.get('star_count', 0):>8,}  "
+                f"{p.get('primary_language', 'Unknown'):<14} "
+                f"{p.get('readme_length', 0):>7,}c  {topics_str}"
+            )
+        print(f"{'═' * width}\n")
 
-    print(f"{'═' * width}\n")
+    # ── Dropped repos ─────────────────────────────────────────────────────────
+    if dropped:
+        print(f"{'─' * width}")
+        print(f"  ⚠️   {len(dropped)} repos dropped by quality filter")
+        print(f"{'─' * width}")
+        print(f"{'Repository':<45}  {'⭐ Stars':>8}  Reason")
+        print("─" * width)
+        for r, reasons in sorted(dropped, key=lambda x: x[0].payload.get("star_count", 0), reverse=True):
+            stars      = r.payload.get("star_count", 0)
+            reason_str = " | ".join(reasons)
+            print(f"  {r.repo_id:<43}  {stars:>8,}  {reason_str}")
+        print(f"{'─' * width}\n")
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -141,11 +213,12 @@ def _print_summary(enriched: list) -> None:
 def _parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(
         prog="main.py",
-        description="gh-social-ml acquisition pipeline: Discovery → Enrichment",
+        description="gh-social-ml acquisition pipeline: Discovery → Enrichment → Quality Filter",
     )
-    p.add_argument("--limit",      type=int, default=100,    help="Target number of repos (default: 100)")
-    p.add_argument("--batch-size", type=int, default=10,     help="Enrichment batch size (default: 10)")
-    p.add_argument("--log-level",  type=str, default="INFO", help="Logging level (default: INFO)")
+    p.add_argument("--limit",            type=int, default=100,    help="Target number of repos (default: 100)")
+    p.add_argument("--batch-size",       type=int, default=10,     help="Enrichment batch size (default: 10)")
+    p.add_argument("--min-readme-chars", type=int, default=200,    help="Minimum README length to keep a repo (default: 200)")
+    p.add_argument("--log-level",        type=str, default="INFO", help="Logging level (default: INFO)")
     return p.parse_args()
 
 
@@ -163,5 +236,12 @@ if __name__ == "__main__":
     logger.info("║  gh-social-ml  ·  Acquisition    ║")
     logger.info("╚══════════════════════════════════╝")
 
-    enriched = run_acquisition(token, limit=args.limit, batch_size=args.batch_size)
-    _print_summary(enriched)
+    enriched          = run_acquisition(token, limit=args.limit, batch_size=args.batch_size)
+    kept, dropped     = filter_enriched(enriched, min_readme_chars=args.min_readme_chars)
+
+    logger.info(
+        "Quality filter: %d kept, %d dropped  (min_readme_chars=%d)",
+        len(kept), len(dropped), args.min_readme_chars,
+    )
+
+    _print_summary(kept, dropped)
