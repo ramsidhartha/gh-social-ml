@@ -202,6 +202,7 @@ class PostgreSQLConnector:
             # Enable pgcrypto for UUID gen_random_uuid()
             try:
                 cursor.execute('CREATE EXTENSION IF NOT EXISTS "pgcrypto";')
+                conn.commit()
             except Exception as exc:
                 # pgcrypto is enabled by default on Supabase and most managed PG hosts.
                 # On local PG it might need superuser — not fatal.
@@ -234,6 +235,7 @@ class PostgreSQLConnector:
             """
             try:
                 cursor.execute(create_table_query)
+                conn.commit()
             except Exception as exc:
                 # If creating table fails (possibly due to gen_random_uuid() being unavailable),
                 # rollback the failed transaction state and try creating without the DEFAULT constraint.
@@ -267,6 +269,7 @@ class PostgreSQLConnector:
                 );
                 """
                 cursor.execute(fallback_table_query)
+                conn.commit()
 
             # Add columns that may be missing from older schema versions
             # (safe — ALTER TABLE ADD IF NOT EXISTS avoids errors on columns that already exist)
@@ -288,6 +291,7 @@ class PostgreSQLConnector:
                     cursor.execute(
                         f"ALTER TABLE Repo ADD COLUMN IF NOT EXISTS {col_name} {col_def};"
                     )
+                    conn.commit()
                 except Exception:
                     conn.rollback()
 
@@ -296,10 +300,10 @@ class PostgreSQLConnector:
                 cursor.execute(
                     "ALTER TABLE Repo ALTER COLUMN github_repo_url TYPE VARCHAR(500);"
                 )
+                conn.commit()
             except Exception:
                 conn.rollback()
 
-            conn.commit()
             logger.info("Database schemas verified successfully.")
         except Exception as exc:
             logger.error(f"Database initialization failed: {exc}")
