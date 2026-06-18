@@ -329,8 +329,10 @@ class UserOnboardingPipeline:
 
         try:
             # Initialize Qdrant client with timeout for production safety
-            # Note: Client is created per-call; consider connection pooling for high-throughput scenarios
             client = QdrantClient(url=url, api_key=api_key, timeout=30.0)
+            
+            # Default vector_name to None for standard collections
+            vector_name = None
 
             # Check if collection exists, create if not
             collections_response = client.get_collections()
@@ -373,11 +375,11 @@ class UserOnboardingPipeline:
                                 existing_distance = vectors_config.get("distance")
                             else:
                                 # Assume it's a named-vector mapping: {"": VectorParams(...)} or {"default": VectorParams(...)}
-                                # Extract the first VectorParams object from values
-                                named_vector_configs = list(vectors_config.values())
-                                if not named_vector_configs:
+                                if not vectors_config:
                                     raise ValueError(f"Collection '{USER_PROFILES_COLLECTION}' has empty named-vector configuration.")
-                                first_config = named_vector_configs[0]
+                                # Extract vector name
+                                vector_name = list(vectors_config.keys())[0]
+                                first_config = vectors_config[vector_name]
                                 existing_size = getattr(first_config, "size", None)
                                 existing_distance = getattr(first_config, "distance", None)
                         else:
@@ -424,11 +426,11 @@ class UserOnboardingPipeline:
                         existing_distance = vectors_config.get("distance")
                     else:
                         # Assume it's a named-vector mapping: {"": VectorParams(...)} or {"default": VectorParams(...)}
-                        # Extract the first VectorParams object from values
-                        named_vector_configs = list(vectors_config.values())
-                        if not named_vector_configs:
+                        if not vectors_config:
                             raise ValueError(f"Collection '{USER_PROFILES_COLLECTION}' has empty named-vector configuration.")
-                        first_config = named_vector_configs[0]
+                        # Extract vector name
+                        vector_name = list(vectors_config.keys())[0]
+                        first_config = vectors_config[vector_name]
                         existing_size = getattr(first_config, "size", None)
                         existing_distance = getattr(first_config, "distance", None)
                 else:
@@ -459,9 +461,12 @@ class UserOnboardingPipeline:
             point_uuid = uuid.uuid5(uuid.NAMESPACE_URL, f"user:{user_id}")
 
             # Insert the vector as a new point
+            # Apply dynamic handling for named versus unnamed vectors
+            final_vector = {vector_name: vector} if vector_name is not None else vector
+
             point = PointStruct(
                 id=str(point_uuid),
-                vector=vector,
+                vector=final_vector,
                 payload=payload,
             )
 
