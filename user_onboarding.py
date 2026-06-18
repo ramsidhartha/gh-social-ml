@@ -9,7 +9,11 @@ import os
 import logging
 import uuid
 import copy
+import math
 from typing import Any, Dict
+
+# Initialize logger immediately after imports to be available for env parsing
+logger = logging.getLogger("pipeline.user_onboarding")
 
 try:
     from sentence_transformers import SentenceTransformer
@@ -40,8 +44,6 @@ QDRANT_URL: str | None = os.getenv("QDRANT_URL", None)
 QDRANT_API_KEY: str | None = os.getenv("QDRANT_API_KEY", None)
 USER_PROFILES_COLLECTION: str = "user_profiles"
 
-logger = logging.getLogger("pipeline.user_onboarding")
-
 
 def _synthesize_user_context_impl(user_data: Dict[str, Any]) -> str:
     """Pure helper function to flatten user profile data into a single dense text string.
@@ -58,7 +60,14 @@ def _synthesize_user_context_impl(user_data: Dict[str, Any]) -> str:
 
     Returns:
         A single dense text string combining all user profile information.
+
+    Raises:
+        ValueError: If user_data is not a dictionary.
     """
+    # Validate user_data is a dictionary to prevent AttributeError on .get()
+    if not isinstance(user_data, dict):
+        raise ValueError("user_data must be a dictionary.")
+
     skills = user_data.get("skills", [])
     tech_stack = user_data.get("tech_stack", [])
     interests = user_data.get("interests", [])
@@ -206,7 +215,6 @@ class UserOnboardingPipeline:
                 )
             
             # Validate vector elements are numbers
-            import math
             for i, val in enumerate(vector):
                 if not isinstance(val, (int, float)):
                     raise ValueError(f"Vector element at index {i} is not a number: {val}")
@@ -261,7 +269,6 @@ class UserOnboardingPipeline:
             raise ValueError("vector must be a non-empty list.")
 
         # Validate vector elements are numbers and not NaN/Inf
-        import math
         for i, val in enumerate(vector):
             if not isinstance(val, (int, float)):
                 raise ValueError(f"Vector element at index {i} is not a number: {val}")
@@ -288,6 +295,7 @@ class UserOnboardingPipeline:
 
         try:
             # Initialize Qdrant client with timeout for production safety
+            # Note: Client is created per-call; consider connection pooling for high-throughput scenarios
             client = QdrantClient(url=url, api_key=api_key, timeout=30.0)
 
             # Check if collection exists, create if not
@@ -383,6 +391,9 @@ def synthesize_user_context(user_data: Dict[str, Any]) -> str:
 
     Returns:
         A single dense text string combining all user profile information.
+
+    Raises:
+        ValueError: If user_data is not a dictionary.
     """
     return _synthesize_user_context_impl(user_data)
 
@@ -398,7 +409,14 @@ def generate_interest_vector(user_data: Dict[str, Any]) -> list[float]:
 
     Returns:
         A list of floats representing the user's interest vector.
+
+    Raises:
+        ValueError: If user_data is not a dictionary.
     """
+    # Validate input before creating pipeline to avoid unnecessary model loading
+    if not isinstance(user_data, dict):
+        raise ValueError("user_data must be a dictionary.")
+    
     pipeline = UserOnboardingPipeline()
     return pipeline.generate_interest_vector(user_data)
 
@@ -424,7 +442,16 @@ def save_user_vector_to_qdrant(
 
     Returns:
         True if the vector was successfully saved, False otherwise.
+
+    Raises:
+        ValueError: If user_id or vector validation fails.
     """
+    # Validate inputs before creating pipeline to avoid unnecessary model loading
+    if not user_id or not isinstance(user_id, str):
+        raise ValueError("user_id must be a non-empty string.")
+    if not isinstance(vector, list) or len(vector) == 0:
+        raise ValueError("vector must be a non-empty list.")
+    
     pipeline = UserOnboardingPipeline()
     return pipeline.save_to_qdrant(
         user_id=user_id,
