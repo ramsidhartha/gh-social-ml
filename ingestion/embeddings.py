@@ -74,6 +74,13 @@ def chunk_text(
     overlap_chars: int = README_CHUNK_OVERLAP_CHARS,
 ) -> list[TextChunk]:
     """Split text into overlapping chunks suitable for README embeddings."""
+    if max_chars <= 0:
+        raise ValueError("max_chars must be greater than 0")
+    if overlap_chars < 0:
+        raise ValueError("overlap_chars must be greater than or equal to 0")
+    if overlap_chars >= max_chars:
+        raise ValueError("overlap_chars must be smaller than max_chars")
+
     clean = (text or "").strip()
     if not clean:
         return []
