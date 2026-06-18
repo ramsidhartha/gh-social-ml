@@ -9,6 +9,7 @@ import math
 import os
 from itertools import combinations
 from statistics import mean, pstdev
+from time import perf_counter
 from typing import Any
 
 from dotenv import load_dotenv
@@ -46,7 +47,8 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--qdrant-api-key", default=QDRANT_API_KEY, help="Qdrant API key")
     parser.add_argument("--collection", default=QDRANT_COLLECTION_NAME, help="Qdrant collection name")
     parser.add_argument("--model", default=os.getenv("EMBEDDING_MODEL", "all-MiniLM-L6-v2"), help="SentenceTransformer model")
-    parser.add_argument("--log-level", default="INFO", help="Logging level")
+    parser.add_argument("--compare-current", action="store_true", help="Compare ENN exact search with non-exact search")
+    parser.add_argument("--log-level", default="WARNING", help="Logging level")
     return parser.parse_args()
 
 
@@ -82,13 +84,19 @@ def main() -> None:
         raise SystemExit("Need at least two repository vectors to evaluate semantic retrieval quality.")
 
     query_points = _select_query_points(points, args.query_count)
-    query_reports = _evaluate_repository_queries(store, query_points, top_k=args.top_k)
+    query_reports = _evaluate_repository_queries(store, query_points, top_k=args.top_k, exact=True)
     metrics = _compute_metrics(points, query_reports)
-    text_reports = _evaluate_text_queries(pipeline, top_k=args.top_k)
+    text_reports = _evaluate_text_queries(pipeline, top_k=args.top_k, exact=True)
+    comparison = None
+    if args.compare_current:
+        current_reports = _evaluate_repository_queries(store, query_points, top_k=args.top_k, exact=False)
+        comparison = _compare_reports(query_reports, current_reports)
 
     _print_repository_reports(query_reports)
     _print_metrics(metrics)
     _print_text_reports(text_reports)
+    if comparison:
+        _print_comparison(comparison)
     _print_recommendations(metrics)
 
 
@@ -124,26 +132,68 @@ def _select_query_points(points: list[dict], query_count: int) -> list[dict]:
     return selected
 
 
-def _evaluate_repository_queries(store: QdrantRepositoryStore, query_points: list[dict], *, top_k: int) -> list[dict]:
+def _evaluate_repository_queries(
+    store: QdrantRepositoryStore,
+    query_points: list[dict],
+    *,
+    top_k: int,
+    exact: bool,
+) -> list[dict]:
     reports = []
     for point in query_points:
-        neighbors = store.search(point["vector"], limit=top_k + 1)
+        started = perf_counter()
+        neighbors = store.search(point["vector"], limit=top_k + 1, exact=exact)
+        latency_ms = (perf_counter() - started) * 1000
         filtered = [item for item in neighbors if item.get("repo_id") != point.get("repo_id")][:top_k]
         reports.append(
             {
                 "repo_id": point.get("repo_id"),
                 "category": _category(point),
                 "neighbors": filtered,
+                "exact": exact,
+                "latency_ms": latency_ms,
             }
         )
     return reports
 
 
-def _evaluate_text_queries(pipeline: RepositoryEmbeddingPipeline, *, top_k: int) -> list[dict]:
+def _evaluate_text_queries(pipeline: RepositoryEmbeddingPipeline, *, top_k: int, exact: bool) -> list[dict]:
     reports = []
+    if pipeline.store is None:
+        raise RuntimeError("pipeline.store is required for text-query evaluation")
     for query in QUALITATIVE_QUERIES:
-        reports.append({"query": query, "neighbors": pipeline.search(query, limit=top_k)})
+        started = perf_counter()
+        query_vector = pipeline.embedder.embed_text(query)
+        embedding_ms = (perf_counter() - started) * 1000
+        started = perf_counter()
+        neighbors = pipeline.store.search(query_vector, limit=top_k, exact=exact)
+        latency_ms = (perf_counter() - started) * 1000
+        reports.append(
+            {
+                "query": query,
+                "neighbors": neighbors,
+                "exact": exact,
+                "embedding_ms": embedding_ms,
+                "latency_ms": latency_ms,
+            }
+        )
     return reports
+
+
+def _compare_reports(exact_reports: list[dict], current_reports: list[dict]) -> dict[str, float]:
+    overlaps = []
+    latency_deltas = []
+    for exact_report, current_report in zip(exact_reports, current_reports):
+        exact_ids = [item.get("repo_id") for item in exact_report["neighbors"]]
+        current_ids = [item.get("repo_id") for item in current_report["neighbors"]]
+        overlaps.append(len(set(exact_ids) & set(current_ids)) / max(len(exact_ids), 1))
+        latency_deltas.append(float(exact_report["latency_ms"]) - float(current_report["latency_ms"]))
+    return {
+        "average_top_k_overlap": _safe_mean(overlaps),
+        "average_exact_latency_ms": _safe_mean([float(item["latency_ms"]) for item in exact_reports]),
+        "average_current_latency_ms": _safe_mean([float(item["latency_ms"]) for item in current_reports]),
+        "average_latency_delta_ms": _safe_mean(latency_deltas),
+    }
 
 
 def _compute_metrics(points: list[dict], query_reports: list[dict]) -> dict[str, float | dict]:
@@ -212,11 +262,24 @@ def _print_metrics(metrics: dict) -> None:
             print(f"{key}: {value:.4f}")
 
 
+def _print_comparison(comparison: dict[str, float]) -> None:
+    print("\nENN vs current search comparison")
+    print("=" * 78)
+    print(f"average_top_k_overlap: {comparison['average_top_k_overlap']:.4f}")
+    print(f"average_exact_latency_ms: {comparison['average_exact_latency_ms']:.2f}")
+    print(f"average_current_latency_ms: {comparison['average_current_latency_ms']:.2f}")
+    print(f"average_latency_delta_ms: {comparison['average_latency_delta_ms']:.2f}")
+
+
 def _print_text_reports(reports: list[dict]) -> None:
     print("\nQualitative text-query checks")
     print("=" * 78)
     for report in reports:
         print(f"\nQuery: {report['query']}")
+        print(
+            f"  exact={report['exact']} embedding_ms={report['embedding_ms']:.2f} "
+            f"qdrant_latency_ms={report['latency_ms']:.2f}"
+        )
         for index, neighbor in enumerate(report["neighbors"], 1):
             payload = neighbor.get("payload", {})
             print(

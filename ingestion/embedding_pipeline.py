@@ -109,16 +109,16 @@ class RepositoryEmbeddingPipeline:
         self.store.upsert(results)
         return results
 
-    def search(self, query: str, *, limit: int = 5) -> list[dict]:
+    def search(self, query: str, *, limit: int = 5, exact: bool = True) -> list[dict]:
         """Embed a text query and search the configured Qdrant collection."""
         # The below query embedding is for searching with the same model/config
         # used during repository indexing.
         if self.store is None:
             self.store = QdrantRepositoryStore(vector_size=self.config.embedding_dim)
-        self.store.ensure_collection()
+        self.store.validate_collection()
         query_vector = self.embedder.embed_text(query)
         self._validate_embedding_dim("query", query_vector)
-        return self.store.search(query_vector, limit=limit)
+        return self.store.search(query_vector, limit=limit, exact=exact)
 
     def _validate_embedding_dim(self, label: str, vector: list[float]) -> None:
         if len(vector) != self.config.embedding_dim:

@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import logging
 import os
+from time import perf_counter
 
 from dotenv import load_dotenv
 
@@ -39,7 +40,8 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--qdrant-api-key", default=QDRANT_API_KEY, help="Qdrant API key")
     parser.add_argument("--collection", default=QDRANT_COLLECTION_NAME, help="Qdrant collection name")
     parser.add_argument("--model", default=os.getenv("EMBEDDING_MODEL", "all-MiniLM-L6-v2"), help="SentenceTransformer model")
-    parser.add_argument("--log-level", default="INFO", help="Logging level")
+    parser.add_argument("--compare-current", action="store_true", help="Also run the previous non-exact Qdrant search")
+    parser.add_argument("--log-level", default="WARNING", help="Logging level")
     return parser.parse_args()
 
 
@@ -63,10 +65,32 @@ def main() -> None:
     for query in queries:
         print(f"\nQuery: {query}")
         print("-" * 78)
-        for index, match in enumerate(pipeline.search(query, limit=args.top_k), 1):
+        started = perf_counter()
+        query_vector = pipeline.embedder.embed_text(query)
+        embedding_ms = (perf_counter() - started) * 1000
+        started = perf_counter()
+        matches = store.search(query_vector, limit=args.top_k, exact=True)
+        exact_ms = (perf_counter() - started) * 1000
+        print(f"Search mode: ENN exact=True  embedding_ms={embedding_ms:.2f}  qdrant_latency_ms={exact_ms:.2f}")
+        for index, match in enumerate(matches, 1):
             payload = match.get("payload", {})
             category = payload.get("discovery_category") or payload.get("category") or "Unknown"
             print(f"{index:>2}. score={match['score']:.4f}  repo={match.get('repo_id')}  category={category}")
+        if args.compare_current:
+            started = perf_counter()
+            current_matches = store.search(query_vector, limit=args.top_k, exact=False)
+            current_ms = (perf_counter() - started) * 1000
+            overlap = _ranked_overlap(matches, current_matches)
+            print(
+                f"Current search comparison: exact=False qdrant_latency_ms={current_ms:.2f} "
+                f"top_k_overlap={overlap}/{args.top_k}"
+            )
+
+
+def _ranked_overlap(left: list[dict], right: list[dict]) -> int:
+    left_ids = {item.get("repo_id") for item in left}
+    right_ids = {item.get("repo_id") for item in right}
+    return len(left_ids & right_ids)
 
 
 if __name__ == "__main__":

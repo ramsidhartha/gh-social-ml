@@ -71,6 +71,12 @@ class QdrantRepositoryStore:
         for field_name in QDRANT_PAYLOAD_INDEX_FIELDS:
             self._create_payload_index(field_name)
 
+    def validate_collection(self) -> None:
+        """Validate the configured collection without creating indexes."""
+        if not self._collection_exists():
+            raise ValueError(f"Qdrant collection {self.collection_name!r} does not exist.")
+        self._validate_collection()
+
     def upsert(self, results: Iterable[RepositoryEmbeddingResult]) -> None:
         """Upsert embedding results into Qdrant."""
         points = []
@@ -89,14 +95,24 @@ class QdrantRepositoryStore:
         self.client.upsert(collection_name=self.collection_name, points=points)
         logger.info("Upserted %d repository vectors into %s", len(points), self.collection_name)
 
-    def search(self, vector: list[float], *, limit: int = 5, with_vectors: bool = False) -> list[dict]:
+    def search(
+        self,
+        vector: list[float],
+        *,
+        limit: int = 5,
+        with_vectors: bool = False,
+        exact: bool = True,
+    ) -> list[dict]:
         """Search Qdrant by final repository embedding vector."""
         # The below query uses the named vector configured for repository
-        # embeddings, so search targets the final repo embedding field.
+        # embeddings, so search targets the final repo embedding field. Exact
+        # search is the default for evaluation-grade nearest-neighbor results.
+        search_params = self.models.SearchParams(exact=exact)
         response = self.client.query_points(
             collection_name=self.collection_name,
             query=vector,
             using=self.vector_name,
+            search_params=search_params,
             limit=limit,
             with_payload=True,
             with_vectors=with_vectors,
