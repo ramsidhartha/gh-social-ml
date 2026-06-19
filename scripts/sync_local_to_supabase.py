@@ -1,3 +1,4 @@
+import os
 import logging
 import json
 from dotenv import load_dotenv
@@ -21,7 +22,10 @@ def sync():
         return
         
     # 2. Connect to Supabase
-    supabase_url = "postgresql://postgres.yauetbynmjslennjfczt:Github2405!@aws-1-ap-southeast-2.pooler.supabase.com:6543/postgres"
+    supabase_url = os.getenv("SUPABASE_URL")
+    if not supabase_url:
+        logger.error("SUPABASE_URL environment variable is not set.")
+        return
     logger.info("Connecting to Supabase PostgreSQL...")
     supabase_db = PostgreSQLConnector(database_url=supabase_url)
     if not supabase_db.verify_connection():
