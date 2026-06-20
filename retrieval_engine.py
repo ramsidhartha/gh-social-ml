@@ -15,14 +15,14 @@ except ImportError:
 
 from qdrant_client import QdrantClient
 
-from ingestion.config import (
+from config import (  # type: ignore
     QDRANT_API_KEY,
     QDRANT_URL,
     QDRANT_VECTOR_NAME,
     QDRANT_COLLECTION_NAME,
 )
-from ingestion.qdrant_store import QdrantRepositoryStore
-from user_onboarding import USER_PROFILES_COLLECTION
+from embedding.qdrant_store import QdrantRepositoryStore  # type: ignore
+from scripts.user_onboarding import USER_PROFILES_COLLECTION, TARGET_VECTOR_NAME  # type: ignore
 
 logger = logging.getLogger("pipeline.retrieval")
 
@@ -52,7 +52,9 @@ ON CONFLICT (user_id) DO UPDATE SET
 """
 
 _SELECT_SQL = f"""
-SELECT batch_data FROM {_RECOMMENDATIONS_TABLE} WHERE user_id = %s;
+SELECT batch_data FROM {_RECOMMENDATIONS_TABLE} 
+WHERE user_id = %s 
+  AND updated_at > NOW() - INTERVAL '24 HOURS';
 """
 
 
@@ -190,7 +192,11 @@ class RetrievalEngine:
         # user_profiles stores unnamed vectors (list), but handle the
         # named-vector case defensively in case the schema evolves.
         if isinstance(point.vector, dict):
-            # Named vectors: take the first (and only) vector value
+            # Explicitly select the configured onboarding vector name
+            if TARGET_VECTOR_NAME and TARGET_VECTOR_NAME in point.vector:
+                return list(point.vector[TARGET_VECTOR_NAME])
+            
+            # Fallback
             vectors = list(point.vector.values())
             if not vectors:
                 raise ValueError(f"User '{user_id}' has an empty named-vector dict.")
@@ -322,9 +328,12 @@ class RetrievalEngine:
                     with_payload=True,
                     with_vectors=False,
                 )
-            except Exception:
-                # Collection doesn't exist — no users onboarded yet
-                return users
+            except Exception as exc:
+                if "Not found" in str(exc) or "doesn't exist" in str(exc):
+                    # Collection doesn't exist — no users onboarded yet
+                    return users
+                logger.error("Qdrant scroll failed: %s", exc)
+                raise
 
             for record in records:
                 payload = record.payload or {}
@@ -406,12 +415,12 @@ def main() -> None:
             _print_batch("batch_3 (lowest similarity)",  batches["batch_3"])
 
             # ── Quick monotonicity check ──────────────────────────────────────
-            scores_1 = [r["cosine_score"] for r in batches["batch_1"]] or [0]
-            scores_3 = [r["cosine_score"] for r in batches["batch_3"]] or [0]
-            if scores_1 and scores_3 and min(scores_1) >= max(scores_3):
-                print("  [PASS]  Monotonicity check passed: batch_1 min >= batch_3 max")
-            elif not scores_3:
+            scores_1 = [r["cosine_score"] for r in batches["batch_1"]]
+            scores_3 = [r["cosine_score"] for r in batches["batch_3"]]
+            if not scores_3:
                 print("  [WARN]  batch_3 is empty (corpus may have < 45 repos)")
+            elif scores_1 and min(scores_1) >= max(scores_3):
+                print("  [PASS]  Monotonicity check passed: batch_1 min >= batch_3 max")
             else:
                 print(
                     f"  [FAIL]  Monotonicity FAILED: batch_1 min={min(scores_1):.4f} "
