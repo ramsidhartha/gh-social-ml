@@ -78,7 +78,7 @@ class RankerService:
         # Load Model
         self.model = MMoEHeavyRanker(self.input_dim).to(self.device)
         if os.path.exists(model_path):
-            self.model.load_state_dict(torch.load(model_path, map_location=self.device))
+            self.model.load_state_dict(torch.load(model_path, map_location=self.device, weights_only=True))
             self.model.eval()
             print("✅ Heavy Ranker Model loaded successfully.")
         else:
@@ -139,7 +139,7 @@ class RankerService:
             
             # Ensure 1D array handling
             if len(candidate_repos) == 1:
-                p_ctr, p_save, p_gh, p_dwell, p_fol = [p_ctr.unsqueeze(0)], [p_save.unsqueeze(0)], [p_gh.unsqueeze(0)], [p_dwell.unsqueeze(0)], [p_fol.unsqueeze(0)]
+                p_ctr, p_save, p_gh, p_dwell, p_fol = p_ctr.unsqueeze(0), p_save.unsqueeze(0), p_gh.unsqueeze(0), p_dwell.unsqueeze(0), p_fol.unsqueeze(0)
                 
             p_ctr = p_ctr.cpu().numpy()
             p_save = p_save.cpu().numpy()
