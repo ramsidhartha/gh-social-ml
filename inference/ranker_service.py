@@ -79,10 +79,10 @@ class RankerService:
         self.model = MMoEHeavyRanker(self.input_dim).to(self.device)
         if os.path.exists(model_path):
             self.model.load_state_dict(torch.load(model_path, map_location=self.device, weights_only=True))
-            self.model.eval()
             print("✅ Heavy Ranker Model loaded successfully.")
         else:
             print(f"⚠️ WARNING: {model_path} not found. Running with untrained weights for demo.")
+        self.model.eval()
             
         # Load Scaler
         if os.path.exists(scaler_path):
@@ -125,6 +125,7 @@ class RankerService:
             dense_features.append(row)
             
         dense_features = np.array(dense_features)
+        unscaled_features = dense_features.copy()
         
         if self.scaler:
             dense_features = self.scaler.transform(dense_features)
@@ -157,7 +158,7 @@ class RankerService:
             results.append({
                 "repo_id": repo['id'],
                 "final_score": float(final_scores[i]),
-                "skill_match": float(dense_features[i][9]), # For debug
+                "skill_match": float(unscaled_features[i][9]), # For debug
                 "predictions": {
                     "p_ctr": float(p_ctr[i]),
                     "p_save": float(p_save[i]),
