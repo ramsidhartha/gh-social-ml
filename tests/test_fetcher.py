@@ -81,8 +81,14 @@ class TestParseTrendingHtml:
                 <a href="/test-owner/test-repo">test-repo</a>
             </h2>
             <p class="col-9">A test repository</p>
-            <span aria-label="star">1,234</span>
-            <span aria-label="fork">56</span>
+            <a href="/test-owner/test-repo/stargazers">
+                <svg>star</svg>
+                1,234
+            </a>
+            <a href="/test-owner/test-repo/forks">
+                <svg>fork</svg>
+                56
+            </a>
             <span itemprop="programmingLanguage">Python</span>
         </article>
         """
