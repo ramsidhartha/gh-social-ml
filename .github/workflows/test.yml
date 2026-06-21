@@ -75,7 +75,7 @@ jobs:
         DATABASE_URL: postgresql://test:test@localhost:5432/test_db
         TEST_DATABASE_URL: postgresql://test:test@localhost:5432/test_db
       run: |
-        pytest tests/ -m "unit" --benchmark-only --benchmark-autosave
+        pytest tests/ -m "benchmark" --benchmark-only --benchmark-autosave
     
     - name: Upload coverage to Codecov
       uses: codecov/codecov-action@v3

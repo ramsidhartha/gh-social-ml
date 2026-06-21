@@ -10,6 +10,7 @@ page without applying custom URL parameters or post-fetch filtering.
 
 from __future__ import annotations
 
+import html
 import logging
 import re
 import time
@@ -123,18 +124,23 @@ class TrendingFetcher:
                 # Clean up HTML tags from description
                 description = re.sub(r'<[^>]+>', '', description)
                 description = re.sub(r'\s+', ' ', description).strip()
+                # Unescape HTML entities (e.g., R&amp;D -> R&D)
+                description = html.unescape(description)
                 
-                # Extract star count - look for stargazers link with number after SVG
-                # The star count appears after the SVG in the stargazers link
+                # Extract star count - try stargazers link first, fallback to aria-label
                 stars_match = re.search(r'<a[^>]*href=\"[^\"]*/stargazers[^\"]*\"[^>]*>.*?</svg>\s*([\d,]+)', repo_html, re.DOTALL)
+                if not stars_match:
+                    stars_match = re.search(r'<span[^>]*aria-label=\"star\"[^>]*>([\d,]+)', repo_html)
                 star_count = int(stars_match.group(1).replace(',', '')) if stars_match else 0
                 
                 # Extract daily stars (stars today) if available
                 daily_stars_match = re.search(r'([\d,]+)\s+stars\s+today', repo_html, re.IGNORECASE)
                 daily_stars = int(daily_stars_match.group(1).replace(',', '')) if daily_stars_match else 0
                 
-                # Extract fork count - look for forks link with number after SVG
+                # Extract fork count - try forks link first, fallback to aria-label
                 forks_match = re.search(r'<a[^>]*href=\"[^\"]*/forks[^\"]*\"[^>]*>.*?</svg>\s*([\d,]+)', repo_html, re.DOTALL)
+                if not forks_match:
+                    forks_match = re.search(r'<span[^>]*aria-label=\"fork\"[^>]*>([\d,]+)', repo_html)
                 fork_count = int(forks_match.group(1).replace(',', '')) if forks_match else 0
                 
                 # Extract language - look for itemprop="programmingLanguage"

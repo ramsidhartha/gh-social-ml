@@ -240,21 +240,21 @@ class TrendingStorage:
             conn.commit()
             logger.info(f"Successfully upserted {upserted_count}/{len(repositories)} repositories.")
 
-            # Remove repositories that are no longer trending (not in current batch)
-            current_full_names = [repo["full_name"] for repo in repositories]
-            if current_full_names:
+            # Remove repositories that are no longer trending (not in current successful batch)
+            successful_full_names = [repo["full_name"] for repo in repositories[:upserted_count]]
+            if successful_full_names:
                 delete_query = f"""
                 DELETE FROM {config.TRENDING_TABLE_NAME}
-                WHERE full_name NOT IN ({', '.join(['%s'] * len(current_full_names))});
+                WHERE full_name NOT IN ({', '.join(['%s'] * len(successful_full_names))});
                 """
-                cursor.execute(delete_query, tuple(current_full_names))
+                cursor.execute(delete_query, tuple(successful_full_names))
                 deleted_count = cursor.rowcount
                 conn.commit()
                 logger.info(f"Removed {deleted_count} repositories no longer trending.")
 
             # Update metadata with last refresh timestamp
             self._update_metadata(cursor, "last_refresh", refresh_ts.isoformat())
-            self._update_metadata(cursor, "repo_count", str(len(repositories)))
+            self._update_metadata(cursor, "repo_count", str(upserted_count))
             conn.commit()
 
         except Exception as exc:
@@ -343,8 +343,9 @@ class TrendingStorage:
             repositories = []
             for row in rows:
                 repo_dict = dict(zip(columns, row))
-                # Parse JSONB fields
-                repo_dict["topics"] = json.loads(repo_dict["topics"]) if repo_dict["topics"] else []
+                # Parse JSONB fields (only if they're still strings)
+                if isinstance(repo_dict["topics"], str):
+                    repo_dict["topics"] = json.loads(repo_dict["topics"]) if repo_dict["topics"] else []
                 repositories.append(repo_dict)
 
             return repositories

@@ -55,7 +55,6 @@ class TrendingScheduler:
         self.fetcher = fetcher or TrendingFetcher()
         self.storage = storage or TrendingStorage()
         self.running = False
-        self._setup_signal_handlers()
 
     def _setup_signal_handlers(self) -> None:
         """Setup signal handlers for graceful shutdown."""
@@ -167,6 +166,7 @@ class TrendingScheduler:
             logger.warning("Scheduler is already running.")
             return
 
+        self._setup_signal_handlers()
         logger.info(f"Starting trending scheduler (refresh every {config.TRENDING_REFRESH_HOURS} hours)")
         self.running = True
 

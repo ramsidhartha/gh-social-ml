@@ -33,9 +33,8 @@ def setup_logger(
     """
     logger = logging.getLogger(name)
 
-    # Avoid adding handlers multiple times
-    if logger.handlers:
-        return logger
+    # Clear existing handlers to allow new configuration to be applied
+    logger.handlers.clear()
 
     # Set log level
     log_level = level or LOG_LEVEL

@@ -28,7 +28,7 @@ except ImportError:
     pass  # python-dotenv is optional, continue without it
 
 from trending.scheduler import run_scheduler, run_once
-from trending.config import validate_config, TRENDING_REPO_LIMIT, TRENDING_REFRESH_HOURS
+from trending.config import validate_config, TRENDING_REPO_LIMIT_STR, TRENDING_REFRESH_HOURS_STR
 from trending.logger import setup_logger
 
 
@@ -61,14 +61,14 @@ Examples:
         "--limit",
         type=int,
         default=None,
-        help=f"Number of repositories to fetch (default: {TRENDING_REPO_LIMIT})",
+        help=f"Number of repositories to fetch (default: {TRENDING_REPO_LIMIT_STR})",
     )
 
     parser.add_argument(
         "--refresh-hours",
         type=int,
         default=None,
-        help=f"Refresh interval in hours (default: {TRENDING_REFRESH_HOURS})",
+        help=f"Refresh interval in hours (default: {TRENDING_REFRESH_HOURS_STR})",
     )
 
     parser.add_argument(
@@ -109,7 +109,18 @@ def main():
     logger.info("GitHub Trending Ingestion Service")
     logger.info("=" * 60)
 
-    # Validate configuration
+    # Override configuration if command-line arguments provided (before validation)
+    if args.limit:
+        import trending.config as config
+        config.TRENDING_REPO_LIMIT_STR = str(args.limit)
+        logger.info(f"Override: TRENDING_REPO_LIMIT = {args.limit}")
+
+    if args.refresh_hours:
+        import trending.config as config
+        config.TRENDING_REFRESH_HOURS_STR = str(args.refresh_hours)
+        logger.info(f"Override: TRENDING_REFRESH_HOURS = {args.refresh_hours}")
+
+    # Validate configuration (after CLI overrides)
     config_errors = validate_config()
     if config_errors:
         logger.error("Configuration validation failed:")
@@ -126,17 +137,6 @@ def main():
     if not args.scheduled and not args.once:
         logger.error("Either --scheduled or --once must be specified (unless using --validate-config)")
         sys.exit(1)
-
-    # Override configuration if command-line arguments provided
-    if args.limit:
-        import trending.config as config
-        config.TRENDING_REPO_LIMIT = args.limit
-        logger.info(f"Override: TRENDING_REPO_LIMIT = {args.limit}")
-
-    if args.refresh_hours:
-        import trending.config as config
-        config.TRENDING_REFRESH_HOURS = args.refresh_hours
-        logger.info(f"Override: TRENDING_REFRESH_HOURS = {args.refresh_hours}")
 
     # Run in requested mode
     try:
