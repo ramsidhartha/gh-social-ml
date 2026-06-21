@@ -175,7 +175,7 @@ class TrendingScheduler:
 
         # Run once immediately on startup
         logger.info("Running initial refresh on startup...")
-        self.refresh_trending_repositories()
+        self.refresh_trending_repositories(force=True)
 
         # Main scheduling loop
         try:

@@ -322,7 +322,7 @@ class TrendingStorage:
             query = f"""
             SELECT
                 full_name, name, owner, url, description,
-                star_count, fork_count, created_at, pushed_at,
+                star_count, daily_stars, fork_count, created_at, pushed_at,
                 primary_language, topics, readme, default_branch,
                 first_seen_at, last_seen_at, trending_rank
             FROM {config.TRENDING_TABLE_NAME}
@@ -335,7 +335,7 @@ class TrendingStorage:
 
             columns = [
                 "full_name", "name", "owner", "url", "description",
-                "star_count", "fork_count", "created_at", "pushed_at",
+                "star_count", "daily_stars", "fork_count", "created_at", "pushed_at",
                 "primary_language", "topics", "readme", "default_branch",
                 "first_seen_at", "last_seen_at", "trending_rank",
             ]

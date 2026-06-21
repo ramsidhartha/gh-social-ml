@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import logging
 import re
+import time
 from typing import Any
 
 import requests
@@ -76,6 +77,7 @@ class TrendingFetcher:
                     logger.error(f"Failed to fetch trending page after {config.GITHUB_MAX_RETRIES} attempts: {exc}")
                     raise
                 logger.warning(f"Attempt {attempt + 1} failed, retrying: {exc}")
+                time.sleep(2 ** attempt)
 
     def _parse_trending_html(self, html: str) -> list[dict[str, Any]]:
         """Parse the GitHub Trending HTML to extract repository data.
