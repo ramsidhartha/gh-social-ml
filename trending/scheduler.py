@@ -1,0 +1,243 @@
+"""Scheduler for trending repository ingestion engine.
+
+This module manages the 8-hour refresh cycle for trending repositories using
+the schedule library.
+"""
+
+from __future__ import annotations
+
+import logging
+import signal
+import time
+from datetime import datetime, timezone
+from typing import Callable
+
+try:
+    import schedule
+    HAS_SCHEDULE = True
+except ImportError:
+    HAS_SCHEDULE = False
+
+from .config import (
+    TRENDING_REFRESH_HOURS,
+    validate_config,
+)
+from .fetcher import TrendingFetcher
+from .storage import TrendingStorage
+from .logger import get_logger
+
+logger = get_logger(__name__)
+
+
+class TrendingScheduler:
+    """Scheduler for trending repository ingestion engine.
+
+    This class manages the periodic refresh of trending repositories using
+    the schedule library. It supports both scheduled and one-time execution.
+    """
+
+    def __init__(
+        self,
+        fetcher: TrendingFetcher | None = None,
+        storage: TrendingStorage | None = None,
+    ) -> None:
+        """Initialize the trending scheduler.
+
+        Args:
+            fetcher: Optional TrendingFetcher instance. If not provided,
+                a new fetcher will be created.
+            storage: Optional TrendingStorage instance. If not provided,
+                a new storage will be created.
+        """
+        if not HAS_SCHEDULE:
+            raise ImportError(
+                "schedule library is not installed. "
+                "Run 'pip install schedule' to enable scheduling."
+            )
+
+        self.fetcher = fetcher or TrendingFetcher()
+        self.storage = storage or TrendingStorage()
+        self.running = False
+        self._setup_signal_handlers()
+
+    def _setup_signal_handlers(self) -> None:
+        """Setup signal handlers for graceful shutdown."""
+        signal.signal(signal.SIGINT, self._signal_handler)
+        signal.signal(signal.SIGTERM, self._signal_handler)
+
+    def _signal_handler(self, signum, frame) -> None:
+        """Handle shutdown signals gracefully.
+
+        Args:
+            signum: Signal number.
+            frame: Current stack frame.
+        """
+        logger.info(f"Received signal {signum}. Shutting down gracefully...")
+        self.stop()
+
+    def refresh_trending_repositories(self) -> bool:
+        """Fetch and store trending repositories.
+
+        This is the main refresh operation that:
+        1. Fetches trending repositories from GitHub
+        2. Stores them in the database
+        3. Updates metadata
+
+        Returns:
+            True if refresh succeeded, False otherwise.
+        """
+        logger.info("=" * 60)
+        logger.info("Starting trending repository refresh cycle")
+        logger.info("=" * 60)
+
+        try:
+            # Validate configuration
+            config_errors = validate_config()
+            
+            if config_errors:
+                logger.error("Configuration errors:")
+                for error in config_errors:
+                    logger.error(f"  - {error}")
+                return False
+
+            # Check if enough time has passed since last refresh (24-hour guardrail)
+            last_refresh = self.storage.get_last_refresh_time()
+            if last_refresh:
+                time_since_refresh = datetime.now(timezone.utc) - last_refresh
+                hours_since_refresh = time_since_refresh.total_seconds() / 3600
+                if hours_since_refresh < TRENDING_REFRESH_HOURS:
+                    logger.info(
+                        f"Skipping refresh: only {hours_since_refresh:.1f} hours "
+                        f"since last refresh (required: {TRENDING_REFRESH_HOURS} hours)"
+                    )
+                    return True  # Return True to indicate no error, just skipped
+
+            # Initialize storage schema if needed
+            if self.storage.enabled:
+                self.storage.init_schema()
+            else:
+                logger.warning("Storage not enabled. Skipping database operations.")
+                return False
+
+            # Fetch trending repositories
+            logger.info("Fetching trending repositories from GitHub...")
+            repositories = self.fetcher.fetch_trending_repositories()
+
+            if not repositories:
+                logger.warning("No repositories fetched from GitHub.")
+                return False
+
+            logger.info(f"Fetched {len(repositories)} repositories from GitHub.")
+
+            # Store repositories in database
+            refresh_timestamp = datetime.now(timezone.utc)
+            upserted_count = self.storage.upsert_repositories(
+                repositories, refresh_timestamp
+            )
+
+            if upserted_count == 0:
+                logger.warning("No repositories upserted to database.")
+                return False
+
+            logger.info(f"Successfully upserted {upserted_count} repositories to database.")
+
+            # Log summary
+            last_refresh = self.storage.get_last_refresh_time()
+            if last_refresh:
+                logger.info(f"Last refresh timestamp: {last_refresh.isoformat()}")
+
+            logger.info("=" * 60)
+            logger.info("Trending repository refresh cycle completed successfully")
+            logger.info("=" * 60)
+
+            return True
+
+        except Exception as exc:
+            logger.error(f"Trending repository refresh failed: {exc}", exc_info=True)
+            logger.info("=" * 60)
+            logger.info("Trending repository refresh cycle failed")
+            logger.info("=" * 60)
+            return False
+
+    def start_scheduled(self) -> None:
+        """Start the scheduled refresh cycle.
+
+        This method blocks and runs the refresh cycle every TRENDING_REFRESH_HOURS.
+        Use stop() to gracefully shutdown the scheduler.
+        """
+        if self.running:
+            logger.warning("Scheduler is already running.")
+            return
+
+        logger.info(f"Starting trending scheduler (refresh every {TRENDING_REFRESH_HOURS} hours)")
+        self.running = True
+
+        # Schedule the refresh job
+        schedule.every(TRENDING_REFRESH_HOURS).hours.do(self.refresh_trending_repositories)
+
+        # Run once immediately on startup
+        logger.info("Running initial refresh on startup...")
+        self.refresh_trending_repositories()
+
+        # Main scheduling loop
+        try:
+            while self.running:
+                schedule.run_pending()
+                time.sleep(60)  # Check every minute
+        except KeyboardInterrupt:
+            logger.info("Keyboard interrupt received. Shutting down...")
+        finally:
+            self.running = False
+            schedule.clear()
+            logger.info("Scheduler stopped.")
+
+    def start_once(self) -> bool:
+        """Run a single refresh cycle and return.
+
+        Returns:
+            True if refresh succeeded, False otherwise.
+        """
+        logger.info("Running single refresh cycle...")
+        return self.refresh_trending_repositories()
+
+    def stop(self) -> None:
+        """Stop the scheduled refresh cycle."""
+        if not self.running:
+            logger.warning("Scheduler is not running.")
+            return
+
+        logger.info("Stopping trending scheduler...")
+        self.running = False
+        schedule.clear()
+
+
+def run_scheduler() -> None:
+    """Entry point for running the trending scheduler.
+
+    This function starts the scheduled refresh cycle and blocks until
+    interrupted. Use this as the main entry point for the trending service.
+    """
+    logger.info("Initializing trending scheduler...")
+
+    try:
+        scheduler = TrendingScheduler()
+        scheduler.start_scheduled()
+    except Exception as exc:
+        logger.error(f"Failed to start trending scheduler: {exc}", exc_info=True)
+        raise
+
+
+def run_once() -> bool:
+    """Entry point for running a single refresh cycle.
+
+    Returns:
+        True if refresh succeeded, False otherwise.
+    """
+    logger.info("Initializing single refresh cycle...")
+
+    try:
+        scheduler = TrendingScheduler()
+        return scheduler.start_once()
+    except Exception as exc:
+        logger.error(f"Failed to run single refresh cycle: {exc}", exc_info=True)
+        return False
